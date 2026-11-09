@@ -10,7 +10,7 @@ on:
       DEVICE_TREE:
         description: 'Device tree URL'
         required: true
-        default: 'https://github.com/RR-pixel/vayu.git'
+        default: 'https://gitlab.com/OrangeFox/device/vayu.git'
       DEVICE_TREE_BRANCH:
         description: 'Device tree branch'
         required: true
@@ -28,14 +28,30 @@ on:
         required: true
         default: 'recovery'
       FOX_VARIANT:
-        description: 'Kernel set (default or MIUI)'
+        description: 'Kernel set'
         required: true
         default: 'default'
+        type: choice
+        options:
+          - default
+          - MIUI
+      BUILD_JOBS:
+        description: 'Parallel build jobs'
+        required: true
+        default: '2'
+        type: choice
+        options: ['1', '2', '4']
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
     env:
       MANIFEST_BRANCH: ${{ inputs.MANIFEST_BRANCH }}
       DEVICE_TREE: ${{ inputs.DEVICE_TREE }}
@@ -44,61 +60,153 @@ jobs:
       DEVICE_NAME: ${{ inputs.DEVICE_NAME }}
       BUILD_TARGET: ${{ inputs.BUILD_TARGET }}
       FOX_VARIANT: ${{ inputs.FOX_VARIANT }}
+      BUILD_JOBS: ${{ inputs.BUILD_JOBS }}
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      GIT_TERMINAL_PROMPT: '0'
 
     steps:
-      - name: Clean-up
+      - name: Set source path
+        run: echo "SRC=$HOME/fox_${MANIFEST_BRANCH}" >> "$GITHUB_ENV"
+
+      - name: Clean runner disk
         uses: rokibhasansagar/slimhub_actions@c2a6e4317d3de2b623ac7395b05e9d2149e8289b
 
-      - name: Swap space
+      # The clean-up above deletes the runner's JDK, so JAVA_HOME must be
+      # re-created after it and before any script that needs Java.
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Choose swap size
+        id: swap
+        run: |
+          available_mb=$(df -Pm / | awk 'NR==2 {print $4}')
+          echo "Free disk: ${available_mb} MiB"
+          if [ "$available_mb" -ge 59392 ]; then swap_gb=30
+          elif [ "$available_mb" -ge 39936 ]; then swap_gb=12
+          elif [ "$available_mb" -ge 30720 ]; then swap_gb=8
+          else swap_gb=0
+          fi
+          echo "swap_gb=$swap_gb" >> "$GITHUB_OUTPUT"
+
+      - name: Set swap space
+        if: steps.swap.outputs.swap_gb != '0'
         uses: pierotofy/set-swap-space@fc79b3f67fa8a838184ce84a674ca12238d2c761
         with:
-          swap-size-gb: 16
+          swap-size-gb: ${{ steps.swap.outputs.swap_gb }}
 
       - name: Build environment
         run: |
+          set -eo pipefail
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             git git-lfs curl wget python3 python-is-python3 unzip zip bc bison flex \
             build-essential gperf gcc-multilib g++-multilib lib32ncurses5-dev \
             lib32readline-dev lib32z1-dev liblz4-tool lz4 zstd libncurses5-dev \
             libssl-dev libxml2 libxml2-utils xsltproc rsync lzop pngcrush \
-            squashfs-tools schedtool imagemagick ccache
+            squashfs-tools schedtool imagemagick ccache util-linux
+
           git config --global user.name "github-actions"
           git config --global user.email "actions@users.noreply.github.com"
+          git config --global color.ui false
+
           git clone --depth 1 https://gitlab.com/OrangeFox/misc/scripts
           cd scripts
-          sudo bash setup/android_build_env.sh
-          sudo bash setup/install_android_sdk.sh
+          # fixes "cd: OLDPWD not set" in install_android_sdk.sh
+          sed -i 's/cd -/cd ../g' setup/install_android_sdk.sh || true
+
+          if ! sudo bash setup/android_build_env.sh; then
+            echo "::warning::android_build_env.sh failed (packages were installed above)"
+          fi
+          # The Android SDK is not needed to build a recovery image, so a
+          # failure here must not stop the build.
+          if ! sudo bash setup/install_android_sdk.sh; then
+            echo "::warning::install_android_sdk.sh failed (not required)"
+          fi
+          echo "JAVA_HOME=$JAVA_HOME"
           free -h
           nproc
           df -h /
 
       - name: Sync OrangeFox sources
         run: |
-          mkdir -p ~/OrangeFox_sync
-          cd ~/OrangeFox_sync
+          set -eo pipefail
+          mkdir -p "$HOME/OrangeFox_sync"
+          cd "$HOME/OrangeFox_sync"
           git clone --depth 1 https://gitlab.com/OrangeFox/sync.git
           cd sync
-          ./orangefox_sync.sh --branch "$MANIFEST_BRANCH" --path "$HOME/fox_$MANIFEST_BRANCH"
+          for attempt in 1 2; do
+            echo "=== orangefox_sync.sh attempt ${attempt}/2, branch ${MANIFEST_BRANCH} ==="
+            set +e
+            ./orangefox_sync.sh --branch "$MANIFEST_BRANCH" --path "$SRC" 2>&1 \
+              | tee -a "$GITHUB_WORKSPACE/sync.log"
+            status=${PIPESTATUS[0]}
+            set -e
+            [ "$status" -eq 0 ] && break
+            if [ "$attempt" -eq 2 ]; then
+              echo "::error::orangefox_sync.sh failed (${status})"
+              exit "$status"
+            fi
+            sleep 15
+          done
+          test -f "$SRC/build/envsetup.sh"
+          df -h /
 
       - name: Clone device tree
         run: |
-          cd "$HOME/fox_$MANIFEST_BRANCH"
+          set -eo pipefail
+          cd "$SRC"
           rm -rf "$DEVICE_PATH"
           git clone --depth 1 -b "$DEVICE_TREE_BRANCH" "$DEVICE_TREE" "$DEVICE_PATH"
+          for f in BoardConfig.mk AndroidProducts.mk "twrp_${DEVICE_NAME}.mk" device.mk vendorsetup.sh; do
+            test -f "$DEVICE_PATH/$f" || { echo "::error::Missing $f"; exit 1; }
+          done
+          ls "$DEVICE_PATH/prebuilt" || echo "::warning::no prebuilt directory"
 
       - name: Build OrangeFox
         run: |
-          cd "$HOME/fox_$MANIFEST_BRANCH"
-          export ALLOW_MISSING_DEPENDENCIES=true
-          export LC_ALL=C
-          export FOX_BUILD_DEVICE="$DEVICE_NAME"
-          # envsetup.sh must not be sourced with errexit on
+          set -eo pipefail
+          cd "$SRC"
+          echo "=== twrp_${DEVICE_NAME} / ${BUILD_TARGET}image / kernel=${FOX_VARIANT} / ${BUILD_JOBS} jobs ==="
+
+          # memory/disk log every minute, uploaded with the other logs
+          (
+            while true; do
+              {
+                echo "=== $(date -u +%H:%M:%S) ==="
+                free -m | sed -n 2,3p
+                df -h / | tail -n 1
+              } >> "$GITHUB_WORKSPACE/resources.log"
+              sleep 60
+            done
+          ) &
+          monitor_pid=$!
+          trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
+
           set +e
-          source build/envsetup.sh
+          (
+            set -o pipefail
+            export ALLOW_MISSING_DEPENDENCIES=true
+            export LC_ALL=C
+            export FOX_BUILD_DEVICE="$DEVICE_NAME"
+            if [ "$FOX_VARIANT" != "MIUI" ]; then
+              unset FOX_VARIANT
+            fi
+            # envsetup.sh must not run with errexit on
+            source build/envsetup.sh
+            set -e
+            lunch "twrp_${DEVICE_NAME}-bp2a-eng" \
+              || lunch "twrp_${DEVICE_NAME}-bp3a-eng" \
+              || lunch "twrp_${DEVICE_NAME}-eng"
+            mka adbd "${BUILD_TARGET}image" -j"$BUILD_JOBS"
+          ) 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          result=${PIPESTATUS[0]}
           set -e
-          lunch "twrp_${DEVICE_NAME}-bp2a-eng"
-          mka adbd "${BUILD_TARGET}image" -j2
+          echo "Build exit code: $result"
+          exit "$result"
 
       - name: Diagnose a failed build
         if: failure()
@@ -106,21 +214,40 @@ jobs:
           free -h
           df -h /
           sudo dmesg | grep -i -E "out of memory|killed process|oom" | tail -n 10 || true
+          tail -n 30 "$GITHUB_WORKSPACE/build.log" || true
 
       - name: Collect output
         if: success()
         run: |
+          set -eo pipefail
+          out="$SRC/out/target/product/$DEVICE_NAME"
           mkdir -p "$GITHUB_WORKSPACE/out"
-          cd "$HOME/fox_$MANIFEST_BRANCH/out/target/product/$DEVICE_NAME"
-          ls -al
-          cp -v OrangeFox*.zip OrangeFox*.img recovery.img boot.img vendor_boot.img \
-            "$GITHUB_WORKSPACE/out/" 2>/dev/null || true
+          ls -al "$out"
+          find "$out" -maxdepth 1 -type f \
+            \( -name 'OrangeFox*.zip' -o -name 'OrangeFox*.img' \
+               -o -name 'recovery.img' -o -name 'boot.img' -o -name 'vendor_boot.img' \) \
+            -exec cp -v {} "$GITHUB_WORKSPACE/out/" \;
+          compgen -G "$GITHUB_WORKSPACE/out/*" > /dev/null || {
+            echo "::error::No image or zip was generated"
+            exit 1
+          }
           ls -lh "$GITHUB_WORKSPACE/out"
 
       - name: Upload artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: OrangeFox-${{ inputs.MANIFEST_BRANCH }}-${{ inputs.DEVICE_NAME }}
+          name: OrangeFox-${{ inputs.MANIFEST_BRANCH }}-${{ inputs.DEVICE_NAME }}-${{ inputs.FOX_VARIANT }}
           path: out/
           if-no-files-found: error
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OFRP-${{ inputs.DEVICE_NAME }}-logs
+          path: |
+            sync.log
+            build.log
+            resources.log
+          if-no-files-found: ignore
