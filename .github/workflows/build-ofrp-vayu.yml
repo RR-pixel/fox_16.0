@@ -1,0 +1,351 @@
+# OrangeFox Recovery 16.0 builder for POCO X3 Pro (vayu)
+# Structure follows build-aera-vayu.yml; sync/build flow follows Action-OFRP-Builder
+# (azwhikaru / chickendrop89): OrangeFox sync script + minimal manifest.
+name: OFRP Recovery 16.0 - POCO X3 Pro (vayu)
+
+on:
+  workflow_dispatch:
+    inputs:
+      SYNC_URL:
+        description: OrangeFox sync repository
+        required: true
+        default: https://gitlab.com/OrangeFox/sync.git
+      MANIFEST_BRANCH:
+        description: Manifest branch passed to orangefox_sync.sh --branch
+        required: true
+        default: '16.0'
+      DEVICE_TREE_URL:
+        description: Device tree repository
+        required: true
+        default: https://gitlab.com/OrangeFox/device/vayu.git
+      DEVICE_TREE_BRANCH:
+        description: Device tree branch
+        required: true
+        default: fox_16.0
+      DEVICE_PATH:
+        description: Device path inside the source tree
+        required: true
+        default: device/xiaomi/vayu
+      DEVICE_NAME:
+        description: Device codename (out/target/product/<name>)
+        required: true
+        default: vayu
+      MAKEFILE_NAME:
+        description: Product makefile name without .mk
+        required: true
+        default: twrp_vayu
+      BUILD_TARGET:
+        description: Image target (recovery, boot, vendorboot)
+        required: true
+        default: recovery
+      FOX_VARIANT:
+        description: Kernel set (default = prebuilt/, MIUI = prebuilt/miui/)
+        required: true
+        default: default
+        type: choice
+        options:
+          - default
+          - MIUI
+      build_jobs:
+        description: Parallel build jobs
+        required: true
+        default: '2'
+        type: choice
+        options: ['1', '2', '4']
+      notification_mode:
+        description: Telegram notification mode
+        required: true
+        default: quiet
+        type: choice
+        options:
+          - quiet
+          - loud
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ofrp-vayu-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build OrangeFox ${{ inputs.MANIFEST_BRANCH }} for ${{ inputs.DEVICE_NAME }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      SYNC_URL: ${{ inputs.SYNC_URL }}
+      MANIFEST_BRANCH: ${{ inputs.MANIFEST_BRANCH }}
+      DEVICE_TREE_URL: ${{ inputs.DEVICE_TREE_URL }}
+      DEVICE_TREE_BRANCH: ${{ inputs.DEVICE_TREE_BRANCH }}
+      DEVICE_PATH: ${{ inputs.DEVICE_PATH }}
+      DEVICE_NAME: ${{ inputs.DEVICE_NAME }}
+      MAKEFILE_NAME: ${{ inputs.MAKEFILE_NAME }}
+      BUILD_TARGET: ${{ inputs.BUILD_TARGET }}
+      KERNEL_SET: ${{ inputs.FOX_VARIANT }}
+      BUILD_JOBS: ${{ inputs.build_jobs }}
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      GIT_TERMINAL_PROMPT: '0'
+      GOMAXPROCS: '2'
+      GOGC: '50'
+      GOMEMLIMIT: 10GiB
+
+    steps:
+      - name: Notify Telegram - build started
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NOTIFY_QUIET: ${{ inputs.notification_mode == 'quiet' }}
+        run: |
+          if [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_CHAT_ID" ]]; then
+            MESSAGE="🚀 OrangeFox ${MANIFEST_BRANCH} (${DEVICE_NAME})
+          Build started!
+          Kernel: ${KERNEL_SET}
+          Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+            curl -fsS --retry 2 --max-time 20 \
+              -X POST \
+              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "text=${MESSAGE}" \
+              -d "disable_notification=${NOTIFY_QUIET}" \
+              > /dev/null
+          fi
+
+      - name: Clean runner disk
+        uses: rokibhasansagar/slimhub_actions@c2a6e4317d3de2b623ac7395b05e9d2149e8289b
+
+      - name: Prepare workspace paths
+        id: pwd
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/work"
+          echo "work=$GITHUB_WORKSPACE/work" >> "$GITHUB_OUTPUT"
+          echo "src=$GITHUB_WORKSPACE/work/fox_${MANIFEST_BRANCH}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare the build environment
+        working-directory: ${{ steps.pwd.outputs.work }}
+        run: |
+          set -eo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git git-lfs curl wget aria2 python3 python-is-python3 \
+            unzip zip bc bison flex build-essential gperf \
+            gcc-multilib g++-multilib lib32ncurses-dev lib32readline-dev lib32z1-dev \
+            liblz4-tool lz4 zstd libncurses-dev libssl-dev \
+            libxml2 libxml2-utils xsltproc rsync lzop pngcrush \
+            squashfs-tools schedtool imagemagick ccache util-linux
+
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@users.noreply.github.com"
+          git config --global color.ui false
+
+          # OrangeFox's own environment scripts (same as Action-OFRP-Builder).
+          # The apt list above already covers the basics, so a failure here is
+          # reported as a warning rather than stopping the whole build.
+          git clone --depth 1 https://gitlab.com/OrangeFox/misc/scripts
+          cd scripts
+          sed -i 's/cd -/cd ../g' setup/install_android_sdk.sh || true
+          sudo bash setup/android_build_env.sh || echo "::warning::android_build_env.sh failed"
+          sudo bash setup/install_android_sdk.sh || echo "::warning::install_android_sdk.sh failed"
+          df -h /
+
+      - name: Sync OrangeFox sources and minimal manifest
+        working-directory: ${{ steps.pwd.outputs.work }}
+        run: |
+          set -eo pipefail
+          git clone --depth 1 "$SYNC_URL" sync
+          cd sync
+          for attempt in 1 2; do
+            echo "=== orangefox_sync.sh attempt ${attempt}/2, branch ${MANIFEST_BRANCH} ==="
+            set +e
+            ./orangefox_sync.sh --branch "$MANIFEST_BRANCH" \
+              --path "${{ steps.pwd.outputs.src }}" 2>&1 | tee -a "$GITHUB_WORKSPACE/sync.log"
+            status=${PIPESTATUS[0]}
+            set -e
+            [ "$status" -eq 0 ] && break
+            if [ "$attempt" -eq 2 ]; then
+              echo "::error::orangefox_sync.sh failed (${status}); check that branch ${MANIFEST_BRANCH} is supported"
+              exit "$status"
+            fi
+            sleep 15
+          done
+          test -f "${{ steps.pwd.outputs.src }}/build/envsetup.sh"
+          df -h /
+
+      - name: Clone device tree
+        run: |
+          set -eo pipefail
+          cd "${{ steps.pwd.outputs.src }}"
+          rm -rf "$DEVICE_PATH"
+          git clone --depth 1 -b "$DEVICE_TREE_BRANCH" "$DEVICE_TREE_URL" "$DEVICE_PATH"
+          ls "$DEVICE_PATH"
+
+          for f in BoardConfig.mk AndroidProducts.mk "${MAKEFILE_NAME}.mk" device.mk vendorsetup.sh; do
+            test -f "$DEVICE_PATH/$f" || {
+              echo "::error::Missing $f in $DEVICE_PATH"
+              exit 1
+            }
+          done
+
+          if [ "$KERNEL_SET" = "MIUI" ]; then
+            test -s "$DEVICE_PATH/prebuilt/miui/Image"
+          else
+            test -s "$DEVICE_PATH/prebuilt/Image.gz-dtb"
+          fi
+
+      - name: Choose safe swap size
+        id: swap
+        run: |
+          set -eo pipefail
+          available_mb=$(df -Pm / | awk 'NR==2 {print $4}')
+          echo "Free disk before swap: ${available_mb} MiB"
+          if [ "$available_mb" -ge 59392 ]; then
+            swap_gb=30
+          elif [ "$available_mb" -ge 39936 ]; then
+            swap_gb=12
+          elif [ "$available_mb" -ge 30720 ]; then
+            swap_gb=8
+          else
+            swap_gb=0
+          fi
+          echo "swap_gb=$swap_gb" >> "$GITHUB_OUTPUT"
+
+      - name: Set swap space
+        if: steps.swap.outputs.swap_gb != '0'
+        uses: pierotofy/set-swap-space@fc79b3f67fa8a838184ce84a674ca12238d2c761
+        with:
+          swap-size-gb: ${{ steps.swap.outputs.swap_gb }}
+
+      - name: Check runner resources
+        run: |
+          nproc
+          free -h
+          swapon --show || true
+          df -h /
+
+      - name: Build OrangeFox recovery
+        run: |
+          set -eo pipefail
+          cd "${{ steps.pwd.outputs.src }}"
+          echo "=== ${MAKEFILE_NAME} / ${BUILD_TARGET}image / kernel=${KERNEL_SET} / ${BUILD_JOBS} jobs ==="
+
+          set +e
+          (
+            # No errexit while sourcing envsetup.sh: it runs every device's
+            # vendorsetup.sh, and a trailing false test in one of them aborts
+            # with "pop_var_context: head of shell_variables not a function context".
+            set -o pipefail
+            export ALLOW_MISSING_DEPENDENCIES=true
+            export LC_ALL=C
+            # The 16.0 README exports this before sourcing envsetup.sh (it did so
+            # for mondrian); each device's vendorsetup.sh uses it to pick its target.
+            export FOX_BUILD_DEVICE="$DEVICE_NAME"
+            # Keep the Go/soong heap below the real RAM of this runner
+            # (private-repo runners have far less RAM than public ones).
+            ram_mb=$(free -m | awk '/^Mem:/ {print $2}')
+            export GOMEMLIMIT="$(( ram_mb * 6 / 10 ))MiB"
+            echo "Runner RAM: ${ram_mb} MiB, GOMEMLIMIT=${GOMEMLIMIT}"
+            # vayu's BoardConfig.mk reads FOX_VARIANT to pick prebuilt/miui
+            if [ "$KERNEL_SET" = "MIUI" ]; then
+              export FOX_VARIANT=MIUI
+            fi
+            source build/envsetup.sh
+            set -e
+            # Try the Android 16 style name first, then the older ones.
+            lunch "${MAKEFILE_NAME}-bp2a-eng" \
+              || lunch "${MAKEFILE_NAME}-bp3a-eng" \
+              || lunch "${MAKEFILE_NAME}-eng"
+            mka adbd "${BUILD_TARGET}image" -j"$BUILD_JOBS"
+          ) 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          echo "Build exit code: $result"
+          exit "$result"
+
+      - name: Collect images and hashes
+        if: success()
+        run: |
+          set -eo pipefail
+          out="${{ steps.pwd.outputs.src }}/out/target/product/${DEVICE_NAME}"
+          dst="$GITHUB_WORKSPACE/artifacts"
+          mkdir -p "$dst"
+          ls -al "$out"
+
+          find "$out" -maxdepth 1 -type f \
+            \( -name 'OrangeFox*.img' -o -name 'OrangeFox*.zip' \
+               -o -name 'recovery.img' -o -name 'boot.img' -o -name 'vendor_boot.img' \) \
+            -exec cp -v {} "$dst/" \;
+
+          compgen -G "$dst/*" >/dev/null || {
+            echo '::error::No recovery image or zip was generated'
+            exit 1
+          }
+
+          cd "$dst"
+          find . -maxdepth 1 -type f -print0 | xargs -0 -r sha256sum > SHA256SUMS
+          ls -lh
+
+      - name: Upload OrangeFox images
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OrangeFox-${{ inputs.MANIFEST_BRANCH }}-${{ inputs.DEVICE_NAME }}-${{ inputs.FOX_VARIANT }}-UNTESTED
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OFRP-${{ inputs.DEVICE_NAME }}-build-logs
+          path: |
+            sync.log
+            build.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Notify Telegram - build result
+        if: always()
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NOTIFY_QUIET: ${{ inputs.notification_mode == 'quiet' }}
+          BUILD_STATUS: ${{ job.status }}
+        run: |
+          if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]]; then
+            echo "Telegram secrets not configured"
+            exit 0
+          fi
+
+          case "$BUILD_STATUS" in
+            success)
+              MESSAGE="✅ OrangeFox ${MANIFEST_BRANCH} (${DEVICE_NAME})
+          Build completed successfully!
+          Download artifacts in GitHub Actions." ;;
+            failure)
+              MESSAGE="❌ OrangeFox ${MANIFEST_BRANCH} (${DEVICE_NAME})
+          Build failed. Check GitHub Actions logs." ;;
+            *)
+              MESSAGE="⚠️ OrangeFox ${MANIFEST_BRANCH} (${DEVICE_NAME})
+          Build status: ${BUILD_STATUS}" ;;
+          esac
+
+          MESSAGE="${MESSAGE}
+          https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          curl -fsS --retry 2 --max-time 20 \
+            -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${MESSAGE}" \
+            -d "disable_notification=${NOTIFY_QUIET}" \
+            > /dev/null
