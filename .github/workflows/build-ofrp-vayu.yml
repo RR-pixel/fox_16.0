@@ -238,7 +238,10 @@ jobs:
 
           set +e
           (
-            set -eo pipefail
+            # No errexit while sourcing envsetup.sh: it runs every device's
+            # vendorsetup.sh, and a trailing false test in one of them aborts
+            # with "pop_var_context: head of shell_variables not a function context".
+            set -o pipefail
             export ALLOW_MISSING_DEPENDENCIES=true
             export LC_ALL=C
             # vayu's BoardConfig.mk reads FOX_VARIANT to pick prebuilt/miui
@@ -246,6 +249,7 @@ jobs:
               export FOX_VARIANT=MIUI
             fi
             source build/envsetup.sh
+            set -e
             # Try the Android 16 style name first, then the older ones.
             lunch "${MAKEFILE_NAME}-bp2a-eng" \
               || lunch "${MAKEFILE_NAME}-bp3a-eng" \
@@ -278,6 +282,66 @@ jobs:
 
           cd "$dst"
           find . -maxdepth 1 -type f -print0 | xargs -0 -r sha256sum > SHA256SUMS
+          ls -lh
+
+      - name: Upload OrangeFox images
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OrangeFox-${{ inputs.MANIFEST_BRANCH }}-${{ inputs.DEVICE_NAME }}-${{ inputs.FOX_VARIANT }}-UNTESTED
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OFRP-${{ inputs.DEVICE_NAME }}-build-logs
+          path: |
+            sync.log
+            build.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Notify Telegram - build result
+        if: always()
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NOTIFY_QUIET: ${{ inputs.notification_mode == 'quiet' }}
+          BUILD_STATUS: ${{ job.status }}
+        run: |
+          if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]]; then
+            echo "Telegram secrets not configured"
+            exit 0
+          fi
+
+          case "$BUILD_STATUS" in
+            success)
+              MESSAGE="✅ OrangeFox ${MANIFEST_BRANCH} (${DEVICE_NAME})
+          Build completed successfully!
+          Download artifacts in GitHub Actions." ;;
+            failure)
+              MESSAGE="❌ OrangeFox ${MANIFEST_BRANCH} (${DEVICE_NAME})
+          Build failed. Check GitHub Actions logs." ;;
+            *)
+              MESSAGE="⚠️ OrangeFox ${MANIFEST_BRANCH} (${DEVICE_NAME})
+          Build status: ${BUILD_STATUS}" ;;
+          esac
+
+          MESSAGE="${MESSAGE}
+          https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          curl -fsS --retry 2 --max-time 20 \
+            -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${MESSAGE}" \
+            -d "disable_notification=${NOTIFY_QUIET}" \
+            > /dev/null
+ xargs -0 -r sha256sum > SHA256SUMS
           ls -lh
 
       - name: Upload OrangeFox images
