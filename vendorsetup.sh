@@ -3,9 +3,9 @@
 # 	Copyright (C) 2021-2026 The OrangeFox Recovery Project
 #
 #	OrangeFox is free software: you can redistribute it and/or modify
-#	 it under the terms of the GNU General Public License as published by
-#	 the Free Software Foundation, either version 3 of the License, or
-#	 (at your option) any later version.
+#	it under the terms of the GNU General Public License as published by
+#	the Free Software Foundation, either version 3 of the License, or
+#	any later version.
 #
 #	OrangeFox is distributed in the hope that it will be useful,
 #	but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -17,61 +17,51 @@
 #
 # 	Please maintain this if you use this script or any part of it
 #
-
 FDEVICE="vayu"
 
-aera_get_target_device() {
-	local script_path
-	script_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-	if echo "$script_path" | grep -q "/$FDEVICE$"; then
-		AERA_BUILD_DEVICE="$FDEVICE"
-	elif echo "$0" | grep -q "$FDEVICE"; then
-		AERA_BUILD_DEVICE="$FDEVICE"
-	fi
+fox_get_target_device() {
+  if echo "$BASH_SOURCE" | grep -q "/$FDEVICE/"; then
+      FOX_BUILD_DEVICE="$FDEVICE";
+  elif set | grep BASH_ARGV | grep -w \"$FDEVICE\"; then
+      FOX_BUILD_DEVICE="$FDEVICE";
+  elif echo "${BASH_SOURCE[0]}" | grep -q "/$FDEVICE/"; then
+      FOX_BUILD_DEVICE="$FDEVICE";
+  elif echo "$0" | grep -q "$FDEVICE"; then
+      FOX_BUILD_DEVICE="$FDEVICE";
+  fi
 }
 
-if [ -z "$AERA_BUILD_DEVICE" ]; then
-	aera_get_target_device
+if [ -z "$1" -a -z "$FOX_BUILD_DEVICE" ]; then
+   fox_get_target_device
 fi
 
-if [ "$1" = "$FDEVICE" ] || [ "$AERA_BUILD_DEVICE" = "$FDEVICE" ]; then
+if [ "$1" = "$FDEVICE" -o "$FOX_BUILD_DEVICE" = "$FDEVICE" ]; then
+        export FOX_USE_SPECIFIC_MAGISK_ZIP=~/Magisk/Magisk-v30.7.zip
+   	export TW_DEFAULT_LANGUAGE="en"
 	export LC_ALL="C"
-	export ALLOW_MISSING_DEPENDENCIES=true
-
-	# vayu is A-only with a recovery partition, so no AERA_AB_DEVICE / AERA_VIRTUAL_AB_DEVICE
-	export AERA_VANILLA_BUILD=1
-	export AERA_PRODUCT_PREFIX=AERA
-	export AERA_BUILD_STATUS=Unofficial
-	export AERA_BUILD_TYPE=Beta
-	export AERA_RECOVERY_SYSTEM_PARTITION="/dev/block/mapper/system"
-	export AERA_RECOVERY_VENDOR_PARTITION="/dev/block/mapper/vendor"
-
-	export AERA_USE_BASH_SHELL=1
-	export AERA_USE_TAR_BINARY=1
-	export AERA_USE_SED_BINARY=1
-	export AERA_USE_LZ4_BINARY=1
-	export AERA_USE_ZSTD_BINARY=1
-	export AERA_USE_DATE_BINARY=1
-	export AERA_USE_GREP_BINARY=1
-	export AERA_USE_BUSYBOX_BINARY=1
-	export AERA_USE_XZ_UTILS=1
-	export AERA_USE_NANO_EDITOR=1
-	export AERA_DELETE_AROMAFM=1
-	export AERA_DELETE_MAGISK_ADDON=1
-	export AERA_USE_UPDATED_MAGISKBOOT=1
-	export AERA_USE_FSCK_EROFS_BINARY=1
-	export AERA_USE_PATCHELF_BINARY=1
-
-	export AERA_SETTINGS_ROOT_DIRECTORY=/data/recovery
-	export AERA_MISCELLANEOUS_ROOT_DIRECTORY=/sdcard
-	export AERA_ALLOW_EARLY_SETTINGS_LOAD=1
-
-	# bhima is the India variant of vayu
+ 	export ALLOW_MISSING_DEPENDENCIES=true
+	export FOX_ENABLE_APP_MANAGER=1
+	export FOX_USE_BASH_SHELL=1
+	export FOX_ASH_IS_BASH=1
+	export FOX_USE_TAR_BINARY=1
+	export FOX_USE_XZ_UTILS=1
+	export FOX_USE_LZ4_BINARY=1
+	export FOX_USE_ZSTD_BINARY=1
+	export FOX_USE_BUSYBOX_BINARY=1
+        export FOX_DELETE_AROMAFM=1
+        export FOX_USE_DATE_BINARY=1
 	export TARGET_DEVICE_ALT="bhima"
-	export AERA_TARGET_DEVICES="$TARGET_DEVICE_ALT"
-	export AERA_ENABLE_ROOT_MANAGER=1
 
-	# AERA begins at R1.0; do not append legacy variant or patch suffixes.
-	unset AERA_VARIANT
-	unset AERA_MAINTAINER_PATCH_VERSION
+	export FOX_RECOVERY_SYSTEM_PARTITION="/dev/block/mapper/system"
+	export FOX_RECOVERY_VENDOR_PARTITION="/dev/block/mapper/vendor"
+
+	export FOX_SETTINGS_ROOT_DIRECTORY=/data/recovery
+	export FOX_MISCELLANEOUS_ROOT_DIRECTORY=/sdcard
+
+	export FOX_VANILLA_BUILD=1
+else
+	if [ -z "$FOX_BUILD_DEVICE" -a -z "$BASH_SOURCE" ]; then
+		echo "I: This script requires bash. Not processing the $FDEVICE $(basename $0)"
+	fi
 fi
+#
