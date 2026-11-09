@@ -17,7 +17,7 @@
 #
 
 # fscrypt policy
-AERA_USE_FSCRYPT_POLICY := 2
+TW_USE_FSCRYPT_POLICY := 2
 
 # Display
 TARGET_SCREEN_HEIGHT := 2400
@@ -38,12 +38,11 @@ PRODUCT_USE_DYNAMIC_PARTITIONS := true
 # Crypto
 PRODUCT_PACKAGES += \
     qcom_decrypt \
-    qcom_decrypt_fbe \
-    aera-browser-jail
+    qcom_decrypt_fbe
 
-AERA_INCLUDE_CRYPTO := true
-AERA_INCLUDE_CRYPTO_FBE := true
-AERA_INCLUDE_FBE_METADATA_DECRYPT := true
+TW_INCLUDE_CRYPTO := true
+TW_INCLUDE_CRYPTO_FBE := true
+TW_INCLUDE_FBE_METADATA_DECRYPT := true
 
 # platform
 PLATFORM_VERSION := 99.87.36
@@ -65,19 +64,28 @@ TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/recovery/root/system/etc/recovery.fstab
 TARGET_RECOVERY_DEVICE_MODULES += libion vendor.display.config@1.0 vendor.display.config@2.0 libdisplayconfig.qti
 
 # TWRP specific build flags
-AERA_THEME := portrait_hdpi
+TW_THEME := portrait_hdpi
 RECOVERY_SDCARD_ON_DATA := true
 TARGET_RECOVERY_QCOM_RTC_FIX := true
-AERA_EXCLUDE_DEFAULT_USB_INIT := true
-AERA_INCLUDE_RESETPROP := true
-AERA_INPUT_BLACKLIST := "hbtp_vm"
-AERA_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
-AERA_INCLUDE_LOGCAT := true
+TW_EXCLUDE_DEFAULT_USB_INIT := true
+TW_EXTRA_LANGUAGES := true
+TW_INCLUDE_NTFS_3G := true
+TW_USE_TOOLBOX := true
+TW_INCLUDE_RESETPROP := true
+TW_INCLUDE_LIBRESETPROP := true
+TW_INPUT_BLACKLIST := "hbtp_vm"
+TW_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
+TW_MAX_BRIGHTNESS := 4095
+TW_DEFAULT_BRIGHTNESS := 1640
+TWRP_INCLUDE_LOGCAT := true
 TARGET_USES_LOGD := true
 TARGET_USES_MKE2FS := true
+TW_NO_SCREEN_BLANK := true
+TW_EXCLUDE_APEX := true
 
 # Vibrator
 #TW_SUPPORT_INPUT_AIDL_HAPTICS := true
+TW_NO_HAPTICS := true
 
 #RECOVERY_BINARY_SOURCE_FILES += \
 #    $(TARGET_OUT_VENDOR_EXECUTABLES)/hw/vendor.qti.hardware.vibrator.service
