@@ -10,7 +10,7 @@ on:
       DEVICE_TREE:
         description: 'Device tree URL'
         required: true
-        default: 'https://gitlab.com/OrangeFox/device/vayu.git'
+        default: 'https://github.com/RR-pixel/vayu.git'
       DEVICE_TREE_BRANCH:
         description: 'Device tree branch'
         required: true
