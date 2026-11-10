@@ -70,10 +70,7 @@ BOARD_MKBOOTIMG_ARGS += --header_version $(BOARD_BOOT_HEADER_VERSION)
 
 KERNEL_PATH := $(DEVICE_PATH)/prebuilt
 
-# Kernel selection. FOX_VARIANT is replaced by VAYU_KERNEL, because
-# vendorsetup.sh unsets AERA_VARIANT. Default = prebuilt/Image.gz-dtb;
-# run "export VAYU_KERNEL=MIUI" before building to use prebuilt/miui.
-ifeq ($(VAYU_KERNEL),MIUI)
+ifeq ($(FOX_VARIANT),MIUI)
 # MIUI kernel from vayu_global_images_V12.5.4.0.RJUMIXM_20210818.0000.00_11.0_global
    KERNEL_PATH := $(DEVICE_PATH)/prebuilt/miui
    TARGET_PREBUILT_KERNEL := $(KERNEL_PATH)/Image
@@ -122,7 +119,7 @@ BOARD_HAS_LARGE_FILESYSTEM := true
 BOARD_USES_QCOM_FBE_DECRYPTION := true
 BOARD_USES_METADATA_PARTITION := true
 
-# drift/offset (name not verified for AERA, kept as-is)
+# drift/offset
 TW_QCOM_ATS_OFFSET := 1617714502203
 #
 # cure for "ELF binaries" problems
@@ -132,8 +129,11 @@ BUILD_BROKEN_ELF_PREBUILT_PRODUCT_COPY_FILES := true
 BUILD_BROKEN_DUP_RULES := true
 BUILD_BROKEN_MISSING_REQUIRED_MODULES := true
 
-# (name not verified for AERA, kept as-is)
 TW_INCLUDE_PYTHON := true
+
+# frame rate
+TW_FRAMERATE := 120
+#
 
 # device information for "fastboot update <zip-file>"
 TARGET_BOARD_INFO_FILE := $(DEVICE_PATH)/board-info.txt
@@ -143,20 +143,6 @@ TARGET_BOARD_INFO_FILE := $(DEVICE_PATH)/board-info.txt
 AB_OTA_UPDATER := false
 #
 
-# ----- AERA UI / hardware (moved here from device.mk, like garnet) -----
-# frame rate (was TW_FRAMERATE)
-AERA_FRAMERATE := 120
-
-# brightness (was TW_DEFAULT_BRIGHTNESS / TW_MAX_BRIGHTNESS)
-AERA_DEFAULT_BRIGHTNESS := 1640
-AERA_MAX_BRIGHTNESS := 4095
-
-# was TW_NO_SCREEN_BLANK
-AERA_NO_SCREEN_BLANK := true
-
-# was TW_NO_HAPTICS
-AERA_NO_HAPTICS := true
-
-# WLAN: TW_NO_NETWORK was removed on purpose. AERA_ENABLE_WLAN stays
-# commented out in aera_vayu.mk until WLAN support is added for vayu.
+# no wlan, please!
+TW_NO_NETWORK := true
 #
