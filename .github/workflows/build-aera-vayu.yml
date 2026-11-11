@@ -7,13 +7,13 @@ on:
       device_tree_url:
         description: "Device tree URL"
         required: true
-        default: "https://github.com/RR-pixel/fox_16.0"
+        default: "https://github.com/RR-pixel/vayu/blob/aera-16.0"
         type: string
 
       device_tree_branch:
         description: "Device tree branch"
         required: true
-        default: "fox_16.0"
+        default: "aera_16.0"
         type: string
 
       vayu_kernel:
