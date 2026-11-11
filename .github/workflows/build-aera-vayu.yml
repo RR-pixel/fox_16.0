@@ -1,370 +1,262 @@
-name: AERA Recovery 16.0 - POCO X3 Pro (vayu)
+name: Recovery Build (vayu)
 
 on:
   workflow_dispatch:
     inputs:
-      kernel:
-        description: Prebuilt kernel set (default = prebuilt/, miui = prebuilt/miui/)
+
+      device_tree_url:
+        description: "Device tree URL"
         required: true
-        default: default
+        default: "https://github.com/RR-pixel/fox_16.0"
+        type: string
+
+      device_tree_branch:
+        description: "Device tree branch"
+        required: true
+        default: "fox_16.0"
+        type: string
+
+      vayu_kernel:
+        description: "Kernel yang dipakai"
+        required: true
+        default: "default"
         type: choice
         options:
           - default
           - miui
-      sync_jobs:
-        description: Parallel repo sync jobs
-        required: true
-        default: '4'
-        type: choice
-        options: ['1', '2', '4']
-      build_jobs:
-        description: Parallel build jobs
-        required: true
-        default: '2'
-        type: choice
-        options: ['1', '2', '4']
-      notification_mode:
-        description: Telegram notification mode
-        required: true
-        default: quiet
-        type: choice
-        options:
-          - quiet
-          - loud
 
-permissions:
-  contents: read
-
-concurrency:
-  group: aera-vayu-${{ github.ref }}
-  cancel-in-progress: false
+      publish_release:
+        description: "Upload juga ke GitHub Release (tanpa ini hanya jadi artifact)"
+        required: true
+        default: false
+        type: boolean
 
 jobs:
   build:
-    name: Build AERA 16.0 for vayu
+    if: github.event.repository.owner.id == github.event.sender.id
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
-
-    defaults:
-      run:
-        shell: bash
+    permissions:
+      contents: write
 
     env:
-      ANDROID_DIR: ${{ github.workspace }}/android
-      DEVICE_DIR: device/xiaomi/vayu
-      SYNC_JOBS: ${{ inputs.sync_jobs }}
-      BUILD_JOBS: ${{ inputs.build_jobs }}
-      KERNEL_SET: ${{ inputs.kernel }}
-      USE_CCACHE: '0'
-      LANG: C.UTF-8
-      LC_ALL: C.UTF-8
-      GIT_TERMINAL_PROMPT: '0'
-      GOMAXPROCS: '2'
-      GOGC: '50'
-      GOMEMLIMIT: 10GiB
+      SYNC_URL: https://github.com/AERA-Recovery/android_manifest.git
+      MANIFEST_BRANCH: "aera-16.0"
+      DEVICE_TREE_URL: ${{ inputs.device_tree_url }}
+      DEVICE_TREE_BRANCH: ${{ inputs.device_tree_branch }}
+      DEVICE_PATH: device/xiaomi/vayu
+      DEVICE_NAME: vayu
+      BUILD_TARGET: recovery
+      VAYU_KERNEL_INPUT: ${{ inputs.vayu_kernel }}
+      # Notifikasi Telegram opsional: isi secret TELEGRAM_BOT_TOKEN dan
+      # TELEGRAM_CHAT_ID di repo kalau mau dipakai, kalau kosong dilewati.
+      TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TZ: Asia/Jakarta
 
     steps:
-      - name: Checkout device tree
-        uses: actions/checkout@v4
-        with:
-          path: vayu-tree
-          persist-credentials: false
 
-      - name: Notify Telegram - build started
-        continue-on-error: true
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          NOTIFY_QUIET: ${{ inputs.notification_mode == 'quiet' }}
-        run: |
-          if [[ -n "$TELEGRAM_BOT_TOKEN" && -n "$TELEGRAM_CHAT_ID" ]]; then
-            MESSAGE="🚀 AERA Recovery 16.0 (vayu)
-          Build started!
-          Kernel: ${KERNEL_SET}
-          Branch: ${GITHUB_REF_NAME}
-          Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+    # Cleanup The Actions Workspace Using Custom Composite Run Actions
+    - name: Cleanup
+      uses: rokibhasansagar/slimhub_actions@main
 
-            curl -fsS --retry 2 --max-time 20 \
-              -X POST \
-              "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-              --data-urlencode "text=${MESSAGE}" \
-              -d "disable_notification=${NOTIFY_QUIET}" \
-              > /dev/null
-          fi
+    - name: Create Telegram sender script
+      run: |
+        cat <<'EOF' > /tmp/send_msg.sh
+        #!/bin/bash
+        if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then
+          exit 0
+        fi
+        MSG="$(printf "$1")"
+        curl -s --fail \
+          -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+          -d chat_id="${TG_CHAT}" \
+          -d text="$MSG" \
+          -d parse_mode="Markdown" \
+          -d disable_web_page_preview=true \
+        > /dev/null 2>&1 || true
+        EOF
+        chmod +x /tmp/send_msg.sh
 
-      - name: Clean runner disk
-        uses: rokibhasansagar/slimhub_actions@c2a6e4317d3de2b623ac7395b05e9d2149e8289b
+    - name: Select kernel
+      run: |
+        # Tree vayu OrangeFox memilih kernel lewat FOX_VARIANT=MIUI (prebuilt/miui/).
+        # VAYU_KERNEL ikut diekspor kalau tree AERA kamu memakai nama itu.
+        if [[ "${VAYU_KERNEL_INPUT}" == "miui" ]]; then
+          echo "VAYU_KERNEL=miui" >> $GITHUB_ENV
+          echo "FOX_VARIANT=MIUI" >> $GITHUB_ENV
+        else
+          echo "VAYU_KERNEL=default" >> $GITHUB_ENV
+        fi
+        echo "Kernel: ${VAYU_KERNEL_INPUT}"
 
-      - name: Install build tools
-        run: |
-          set -eo pipefail
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            git git-lfs curl wget aria2 python3 python-is-python3 \
-            unzip zip bc bison flex build-essential gperf \
-            gcc-multilib g++-multilib lib32ncurses-dev lib32readline-dev lib32z1-dev \
-            liblz4-tool lz4 zstd libncurses-dev libssl-dev \
-            libxml2 libxml2-utils xsltproc rsync lzop pngcrush \
-            squashfs-tools schedtool imagemagick ccache util-linux
+    - name: Initialize workspace
+      run: |
+        /tmp/send_msg.sh "🚀 *Starting AERA build* for \`${{ env.DEVICE_NAME }}\` (\`${{ env.DEVICE_TREE_BRANCH }}\`, kernel \`${{ env.VAYU_KERNEL_INPUT }}\`)\n🔗 [View Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+        mkdir workspace
+        cd workspace
+        echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
+      id: pwd
 
-          mkdir -p "$HOME/bin"
-          curl -fLsS --retry 3 \
-            https://storage.googleapis.com/git-repo-downloads/repo \
-            -o "$HOME/bin/repo"
-          chmod +x "$HOME/bin/repo"
-          "$HOME/bin/repo" version
-          df -h /
+    - name: Prepare the build environment
+      run: |
+        /tmp/send_msg.sh "🧩 Preparing build environment..."
+        curl -fL -O "https://gitlab.com/OrangeFox/misc/scripts/-/raw/master/setup/android_build_env.sh"
+        sudo bash android_build_env.sh
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
-      - name: Set up OpenJDK
-        uses: actions/setup-java@v6
-        with:
-          distribution: zulu
-          java-version: '11'
+    - name: Install OpenJDK
+      uses: actions/setup-java@v6
+      with:
+        distribution: 'zulu'
+        java-version: '11'
 
-      - name: Initialize AERA 16.0 sources
-        run: |
-          set -eo pipefail
-          mkdir -p "$ANDROID_DIR"
-          cd "$ANDROID_DIR"
-          "$HOME/bin/repo" init --depth=1 \
-            -u https://github.com/AERA-Recovery/android_manifest.git \
-            -b aera-16.0
-          "$HOME/bin/repo" manifest -o "$GITHUB_WORKSPACE/aera-manifest.xml"
+    - name: Sync AERA sources and minimal manifest
+      run: |
+        /tmp/send_msg.sh "🌐 Syncing AERA sources..."
+        mkdir ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }} && \
+          cd ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}
+        repo init --depth=1 -u ${{ env.SYNC_URL }} -b ${{ env.MANIFEST_BRANCH }}
+        repo sync -c --force-sync --no-clone-bundle --no-tags -j$(nproc)
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
-      - name: Sync sources with live progress
-        run: |
-          set -eo pipefail
-          cd "$ANDROID_DIR"
-          export PYTHONUNBUFFERED=1
+    - name: Get latest bootable/recovery commit
+      id: recovery_commit
+      run: |
+        cd ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/bootable/recovery
+        RECOVERY_COMMIT=$(git rev-parse --short=7 HEAD)
+        echo "RECOVERY_COMMIT=$RECOVERY_COMMIT" >> $GITHUB_OUTPUT
+        echo "Latest bootable/recovery commit: $RECOVERY_COMMIT"
+        /tmp/send_msg.sh "🔁 bootable/recovery: [${RECOVERY_COMMIT}](https://github.com/AERA-Recovery/android_bootable_recovery/tree/${RECOVERY_COMMIT})"
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
-          for attempt in 1 2; do
-            echo "=== repo sync attempt ${attempt}/2; jobs=${SYNC_JOBS} ==="
-            set +e
-            script -q -e -c \
-              "$HOME/bin/repo sync -c --no-clone-bundle --no-tags -j${SYNC_JOBS}" \
-              /dev/null 2>&1 | tee -a "$GITHUB_WORKSPACE/repo-sync.log"
-            status=${PIPESTATUS[0]}
-            set -e
+    - name: Clone device tree
+      run: |
+        /tmp/send_msg.sh "🌲 Cloning device tree for \`${{ env.DEVICE_NAME }}\`..."
+        cd ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}
+        mkdir -p ${{ env.DEVICE_PATH }}
+        git clone --depth=1 ${{ env.DEVICE_TREE_URL }} -b ${{ env.DEVICE_TREE_BRANCH }} ./${{ env.DEVICE_PATH }}
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
-            if [ "$status" -eq 0 ]; then
-              break
-            fi
+    - name: Get latest device tree commit
+      id: devtree_commit
+      run: |
+        cd ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/${{ env.DEVICE_PATH }}
+        LATEST_COMMIT=$(git rev-parse --short=7 HEAD)
+        echo "LATEST_COMMIT=$LATEST_COMMIT" >> $GITHUB_OUTPUT
+        echo "Latest device tree commit: $LATEST_COMMIT"
+        /tmp/send_msg.sh "🌲 Device tree: [${LATEST_COMMIT}](${{ env.DEVICE_TREE_URL }}/tree/$LATEST_COMMIT)"
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
-            if [ "$attempt" -eq 2 ]; then
-              echo "::error::repo sync failed: ${status}"
-              exit "$status"
-            fi
-            sleep 15
-          done
+    - name: Check kernel selection in device tree
+      run: |
+        cd ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/${{ env.DEVICE_PATH }}
+        echo "Referensi pemilih kernel di tree:"
+        if ! grep -n "FOX_VARIANT\|VAYU_KERNEL" BoardConfig.mk vendorsetup.sh device.mk 2>/dev/null; then
+          echo "::warning::Tree tidak memakai FOX_VARIANT/VAYU_KERNEL, pilihan kernel tidak akan berpengaruh. Sesuaikan BoardConfig.mk atau step 'Select kernel'."
+        fi
+        echo
+        ls -la prebuilt prebuilt/miui 2>/dev/null || true
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
-          test -f build/envsetup.sh
-          test -f system/tools/mkbootimg/unpack_bootimg.py
-          df -h /
+    - name: Set Swap Space
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 30
 
-      - name: Install POCO X3 Pro vayu device tree
-        run: |
-          set -eo pipefail
-          mkdir -p "$ANDROID_DIR/$DEVICE_DIR"
-          rsync -a --exclude='.git' --exclude='.github' \
-            "$GITHUB_WORKSPACE/vayu-tree/" "$ANDROID_DIR/$DEVICE_DIR/"
+    - name: Show system resources
+      run: |
+        /tmp/send_msg.sh "📊 Checking runner resources..."
+        echo "CPU cores:"
+        nproc
+        echo
+        echo "Memory:"
+        free -h
+        echo
+        echo "Disk:"
+        df -h
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
-          for f in BoardConfig.mk AndroidProducts.mk twrp_vayu.mk device.mk aera_vayu.mk vendorsetup.sh; do
-            test -f "$ANDROID_DIR/$DEVICE_DIR/$f" || {
-              echo "::error::Missing device file $f"
-              exit 1
-            }
-          done
+    - name: Building recovery
+      run: |
+        /tmp/send_msg.sh "⚙️ Starting build for \`${{ env.DEVICE_NAME }}\` (kernel \`${{ env.VAYU_KERNEL_INPUT }}\`)..."
+        cd ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}
 
-          # Same sanity check as the fog workflow: the vendor makefile that
-          # twrp_*.mk inherits must exist after sync.
-          test -f "$ANDROID_DIR/vendor/twrp/config/common.mk" || {
-            echo "::warning::vendor/twrp/config/common.mk is missing; check twrp_vayu.mk"
-            ls "$ANDROID_DIR/vendor" || true
-            ls "$ANDROID_DIR/vendor/recovery/config" 2>/dev/null || true
-          }
+        set +e
+        source build/envsetup.sh
+        export ALLOW_MISSING_DEPENDENCIES=true
+        set -e
 
-      - name: Check vayu prebuilt kernel
-        run: |
-          set -eo pipefail
-          cd "$ANDROID_DIR/$DEVICE_DIR"
-          if [ "$KERNEL_SET" = "miui" ]; then
-            test -s prebuilt/miui/Image
-            test -s prebuilt/miui/dtbo.img
-            test -d prebuilt/miui/dtbs
-            ls -lh prebuilt/miui
-          else
-            test -s prebuilt/Image.gz-dtb
-            test -s prebuilt/dtbo.img
-            test -d prebuilt/dtbs
-            ls -lh prebuilt
-          fi
+        echo "VAYU_KERNEL=${VAYU_KERNEL} FOX_VARIANT=${FOX_VARIANT:-<unset>}"
 
-      - name: Choose safe swap size
-        id: swap
-        run: |
-          set -eo pipefail
-          available_mb=$(df -Pm / | awk 'NR==2 {print $4}')
-          echo "Free disk before swap: ${available_mb} MiB"
+        if [[ "${{ env.MANIFEST_BRANCH }}" == *"14.1"* ]]; then
+          lunch twrp_${{ env.DEVICE_NAME }}-ap2a-eng
+        elif [[ "${{ env.MANIFEST_BRANCH }}" == *"16.0"* ]]; then
+          lunch twrp_${{ env.DEVICE_NAME }}-bp2a-eng
+        fi
 
-          if [ "$available_mb" -ge 59392 ]; then
-            swap_gb=30
-          elif [ "$available_mb" -ge 39936 ]; then
-            swap_gb=12
-          elif [ "$available_mb" -ge 30720 ]; then
-            swap_gb=8
-          else
-            swap_gb=0
-          fi
+        if ! mka adbd ${{ env.BUILD_TARGET }}image -j$(nproc --all); then
+          /tmp/send_msg.sh "❌ Build failed for \`${{ env.DEVICE_NAME }}\` (\`${{ env.DEVICE_TREE_BRANCH }}\`, kernel \`${{ env.VAYU_KERNEL_INPUT }}\`)\n🔗 [View Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          exit 1
+        fi
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
-          echo "swap_gb=$swap_gb" >> "$GITHUB_OUTPUT"
-          echo "Selected swap size: ${swap_gb} GiB"
+    - name: Show system resources post-build
+      run: |
+        echo "Memory:"
+        free -h
+        echo
+        echo "Disk:"
+        df -h
+        echo
+        ls -la ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/ || true
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
-      - name: Set swap space
-        if: steps.swap.outputs.swap_gb != '0'
-        uses: pierotofy/set-swap-space@fc79b3f67fa8a838184ce84a674ca12238d2c761
-        with:
-          swap-size-gb: ${{ steps.swap.outputs.swap_gb }}
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AERA-16.0-${{ env.DEVICE_NAME }}-${{ env.VAYU_KERNEL_INPUT }}-UNTESTED
+        path: |
+          ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/AERA-R*.img
+          ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/AERA-R*.zip
+          ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/${{ env.BUILD_TARGET }}.img
+        if-no-files-found: error
 
-      - name: Check runner resources
-        run: |
-          nproc
-          free -h
-          swapon --show || true
-          df -h /
+    - name: Upload build log on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log-${{ env.DEVICE_NAME }}-${{ env.VAYU_KERNEL_INPUT }}
+        path: |
+          ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/out/error.log
+          ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/out/verbose.log.gz
+        if-no-files-found: ignore
 
-      - name: Build AERA recovery for vayu
-        run: |
-          set -eo pipefail
-          cd "$ANDROID_DIR"
-          echo "=== vayu / recoveryimage / kernel=${KERNEL_SET} / ${BUILD_JOBS} build jobs ==="
+    - name: Upload to Release
+      if: ${{ inputs.publish_release }}
+      uses: softprops/action-gh-release@v3
+      with:
+        files: |
+          ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/AERA-R*.img
+          ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/AERA-R*.zip
+          ${{ steps.pwd.outputs.workspace-folder }}/${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/${{ env.BUILD_TARGET }}.img
+        fail_on_unmatched_files: false
+        name: ${{ env.DEVICE_NAME }}-${{ env.VAYU_KERNEL_INPUT }}-${{ env.DEVICE_TREE_BRANCH }}-${{ steps.devtree_commit.outputs.LATEST_COMMIT }}
+        tag_name: ${{ github.run_id }}
+        body: |
+          Manifest: ${{ env.MANIFEST_BRANCH }}
+          Device: ${{ env.DEVICE_NAME }}
+          Kernel: ${{ env.VAYU_KERNEL_INPUT }}
+          Target: ${{ env.BUILD_TARGET }}
+          Device tree branch: ${{ env.DEVICE_TREE_BRANCH }}
+          Device tree commit: [${{ steps.devtree_commit.outputs.LATEST_COMMIT }}](${{ env.DEVICE_TREE_URL }}/tree/${{ steps.devtree_commit.outputs.LATEST_COMMIT }})
+          bootable/recovery commit: [${{ steps.recovery_commit.outputs.RECOVERY_COMMIT }}](https://github.com/AERA-Recovery/android_bootable_recovery/tree/${{ steps.recovery_commit.outputs.RECOVERY_COMMIT }})
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-          (
-            while true; do
-              {
-                echo "=== RESOURCES $(date -u +'%H:%M:%S UTC') ==="
-                free -h
-                df -h /
-                ps -eo pid,rss,comm --sort=-rss | head -n 8 || true
-              } 2>&1 | tee -a "$GITHUB_WORKSPACE/resources.log"
-              sleep 45
-            done
-          ) &
-          monitor_pid=$!
-          trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
-
-          set +e
-          (
-            set -eo pipefail
-            source build/envsetup.sh
-            export ALLOW_MISSING_DEPENDENCIES=true
-            # BoardConfig.mk reads VAYU_KERNEL to pick the MIUI kernel set
-            if [ "$KERNEL_SET" = "miui" ]; then
-              export VAYU_KERNEL=MIUI
-            fi
-            # Same release name as the fog workflow; fall back to the plain
-            # name from AndroidProducts.mk if bp2a is not accepted.
-            lunch twrp_vayu-bp2a-eng || lunch twrp_vayu-eng
-            m -j"$BUILD_JOBS" recoveryimage
-          ) 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
-          result=${PIPESTATUS[0]}
-          set -e
-
-          kill "$monitor_pid" 2>/dev/null || true
-          echo "Build exit code: $result"
-          exit "$result"
-
-      - name: Collect recovery images and hashes
-        if: success()
-        run: |
-          set -eo pipefail
-          out="$ANDROID_DIR/out/target/product/vayu"
-          dst="$GITHUB_WORKSPACE/artifacts"
-          mkdir -p "$dst"
-
-          for img in recovery.img boot.img; do
-            if [ -s "$out/$img" ]; then
-              cp -v "$out/$img" "$dst/"
-            fi
-          done
-
-          find "$out" -maxdepth 1 -type f \
-            \( -name 'AERA-R*.img' -o -name 'AERA-R*.zip' \) \
-            -exec cp -v {} "$dst/" \;
-
-          compgen -G "$dst/*.img" >/dev/null || {
-            echo '::error::No recovery image was generated'
-            exit 1
-          }
-
-          cd "$dst"
-          find . -maxdepth 1 -type f \( -name '*.img' -o -name '*.zip' \) \
-            -print0 | xargs -0 -r sha256sum > SHA256SUMS
-          ls -lh
-
-      - name: Upload recovery images
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: AERA-16.0-vayu-${{ inputs.kernel }}-UNTESTED
-          path: artifacts/
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Final resource diagnostics
-        if: always()
-        run: |
-          df -h /
-          free -h
-          swapon --show || true
-
-      - name: Upload build logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: AERA-vayu-build-logs
-          path: |
-            aera-manifest.xml
-            repo-sync.log
-            build.log
-            resources.log
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Notify Telegram - build result
-        if: always()
-        continue-on-error: true
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          NOTIFY_QUIET: ${{ inputs.notification_mode == 'quiet' }}
-          BUILD_STATUS: ${{ job.status }}
-        run: |
-          if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]]; then
-            echo "Telegram secrets not configured"
-            exit 0
-          fi
-
-          case "$BUILD_STATUS" in
-            success)
-              MESSAGE="✅ AERA Recovery 16.0 (vayu)
-          Build completed successfully!
-          Download artifacts in GitHub Actions." ;;
-            failure)
-              MESSAGE="❌ AERA Recovery 16.0 (vayu)
-          Build failed. Check GitHub Actions logs." ;;
-            *)
-              MESSAGE="⚠️ AERA Recovery 16.0 (vayu)
-          Build status: ${BUILD_STATUS}" ;;
-          esac
-
-          MESSAGE="${MESSAGE}
-          https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-
-          curl -fsS --retry 2 --max-time 20 \
-            -X POST \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "text=${MESSAGE}" \
-            -d "disable_notification=${NOTIFY_QUIET}" \
-            > /dev/null
+    - name: Notify complete
+      if: success()
+      run: |
+        RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        DEVICE_TREE_BROWSE_URL="${{ env.DEVICE_TREE_URL }}/tree/${{ steps.devtree_commit.outputs.LATEST_COMMIT }}"
+        RECOVERY_BROWSE_URL="https://github.com/AERA-Recovery/android_bootable_recovery/tree/${{ steps.recovery_commit.outputs.RECOVERY_COMMIT }}"
+        /tmp/send_msg.sh "📦 *Build complete!* (kernel \`${{ env.VAYU_KERNEL_INPUT }}\`)\n🔗 [Download]($RUN_URL)\n🌲 Device tree commit: [${{ steps.devtree_commit.outputs.LATEST_COMMIT }}]($DEVICE_TREE_BROWSE_URL)\n🔁 bootable/recovery commit: [${{ steps.recovery_commit.outputs.RECOVERY_COMMIT }}]($RECOVERY_BROWSE_URL)"
