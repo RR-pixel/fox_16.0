@@ -114,11 +114,18 @@ BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
 
 # Recovery
 BOARD_HAS_LARGE_FILESYSTEM := true
+TARGET_RECOVERY_PIXEL_FORMAT := RGBX_8888
+TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/recovery/root/system/etc/recovery.fstab
+#TARGET_RECOVERY_DEVICE_MODULES += libion vendor.display.config@1.0 vendor.display.config@2.0 libdisplayconfig.qti vendor.qti.hardware.vibrator.service vendor.qti.hardware.vibrator.impl libqtivibratoreffect
+TARGET_RECOVERY_DEVICE_MODULES += libion vendor.display.config@1.0 vendor.display.config@2.0 libdisplayconfig.qti
 
 # Crypto
 BOARD_USES_QCOM_FBE_DECRYPTION := true
 BOARD_USES_METADATA_PARTITION := true
 AERA_INCLUDE_CRYPTO := true
+AERA_INCLUDE_CRYPTO_FBE := true
+AERA_INCLUDE_FBE_METADATA_DECRYPT := true
+AERA_USE_FSCRYPT_POLICY := 2
 
 # drift/offset
 TW_QCOM_ATS_OFFSET := 1617714502203
@@ -134,12 +141,30 @@ BUILD_BROKEN_MISSING_REQUIRED_MODULES := true
 AERA_NO_SCREEN_BLANK := true
 AERA_SCREEN_BLANK_ON_BOOT := true
 AERA_EXTRA_LANGUAGES := true
-AERA_MAX_BRIGHTNESS :=
-AERA_DEFAULT_BRIGHTNESS :=
+AERA_MAX_BRIGHTNESS := 4095
+AERA_DEFAULT_BRIGHTNESS := 1640
 AERA_SCREEN_H := 2400
 AERA_UI_ADAPTIVE_RESOLUTION := true
 AERA_FRAMERATE := 120
-#
+
+# Other AERA Configurations
+AERA_THEME := portrait_hdpi
+RECOVERY_SDCARD_ON_DATA := true
+TARGET_RECOVERY_QCOM_RTC_FIX := true
+AERA_EXCLUDE_DEFAULT_USB_INIT := true
+AERA_INCLUDE_NTFS_3G := true
+AERA_USE_TOOLBOX := true
+AERA_INCLUDE_RESETPROP := true
+AERA_INCLUDE_LIBRESETPROP := true
+AERA_INPUT_BLACKLIST := "hbtp_vm"
+AERA_BRIGHTNESS_PATH := "/sys/class/backlight/panel0-backlight/brightness"
+AERA_INCLUDE_LOGCAT := true
+TARGET_USES_LOGD := true
+TARGET_USES_MKE2FS := true
+AERA_EXCLUDE_APEX := true
+
+# vibrator
+AERA_NO_HAPTICS := true
 
 # device information for "fastboot update <zip-file>"
 TARGET_BOARD_INFO_FILE := $(DEVICE_PATH)/board-info.txt
