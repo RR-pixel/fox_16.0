@@ -174,6 +174,6 @@ TARGET_BOARD_INFO_FILE := $(DEVICE_PATH)/board-info.txt
 AB_OTA_UPDATER := false
 #
 
-# no wlan, please!
-TW_NO_NETWORK := true
+# experiment wlan on
+AERA_ENABLE_WLAN := 1
 #
