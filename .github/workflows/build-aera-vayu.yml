@@ -13,7 +13,7 @@ on:
       device_tree_branch:
         description: "Device tree branch"
         required: true
-        default: "aera_16.0"
+        default: "aera-16.0"
         type: string
 
       vayu_kernel:
