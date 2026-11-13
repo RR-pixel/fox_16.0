@@ -26,6 +26,7 @@
 #
 
 import /init.recovery.qcom_decrypt.rc
+import /init.recovery.wifi.rc
 
 service vendor.qti.vibrator /system/bin/vendor.qti.hardware.vibrator.service
     user root
