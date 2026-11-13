@@ -68,7 +68,7 @@ if [ "$1" = "$FDEVICE" ] || [ "$AERA_BUILD_DEVICE" = "$FDEVICE" ]; then
 
 	# bhima is the India variant of vayu
 	export TARGET_DEVICE_ALT="bhima"
-	export AERA_TARGET_DEVICES="$TARGET_DEVICE_ALT"
+	export AERA_TARGET_DEVICES="vayu"
 	export AERA_ENABLE_ROOT_MANAGER=1
 
 	# AERA begins at R1.0; do not append legacy variant or patch suffixes.
