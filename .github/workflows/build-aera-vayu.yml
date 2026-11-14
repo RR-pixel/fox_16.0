@@ -194,7 +194,7 @@ jobs:
           lunch twrp_${{ env.DEVICE_NAME }}-bp2a-eng
         fi
 
-        if ! ( while true; do echo "[mon] $(date +%H:%M:%S) $(free -m | awk 'NR==2{printf "avail=%sMB ",$7} NR==3{printf "swap=%sMB",$3}') disk=$(df -h / | awk 'NR==2{print $4}')"; sleep 30; done ) & mka adbd ${{ env.BUILD_TARGET }}image -j$(nproc --all); then
+        if ! & mka adbd ${{ env.BUILD_TARGET }}image -j$(nproc --all); then
           /tmp/send_msg.sh "❌ Build failed for \`${{ env.DEVICE_NAME }}\` (\`${{ env.DEVICE_TREE_BRANCH }}\`, kernel \`${{ env.VAYU_KERNEL_INPUT }}\`)\n🔗 [View Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           exit 1
         fi
